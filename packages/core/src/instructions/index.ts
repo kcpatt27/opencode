@@ -179,27 +179,33 @@ export function join(rendered: ReadonlyArray<Rendered>) {
   return render(rendered.map((part) => part.text))
 }
 
+export function renderUpdateParts(
+  value: List,
+  previous: Readonly<Record<string, Schema.Json>>,
+  delta: Readonly<Record<string, Option.Option<Schema.Json>>>,
+): ReadonlyArray<Rendered> {
+  return value.flatMap((source) => {
+    if (!Object.hasOwn(delta, source.key)) return []
+    const current = delta[source.key]
+    if (Option.isNone(current)) {
+      if (!Object.hasOwn(previous, source.key)) return []
+      const text = source.removed(previous[source.key])
+      return text === undefined ? [] : [{ key: source.key, text }]
+    }
+    const next = current.value
+    const text = Object.hasOwn(previous, source.key)
+      ? source.changed(previous[source.key], next)
+      : source.initial(next)
+    return text === undefined ? [] : [{ key: source.key, text }]
+  })
+}
+
 export function renderUpdate(
   value: List,
   previous: Readonly<Record<string, Schema.Json>>,
   delta: Readonly<Record<string, Option.Option<Schema.Json>>>,
 ) {
-  return render(
-    value.flatMap((source) => {
-      if (!Object.hasOwn(delta, source.key)) return []
-      const current = delta[source.key]
-      if (Option.isNone(current)) {
-        if (!Object.hasOwn(previous, source.key)) return []
-        const text = source.removed(previous[source.key])
-        return text === undefined ? [] : [text]
-      }
-      const next = current.value
-      const text = Object.hasOwn(previous, source.key)
-        ? source.changed(previous[source.key], next)
-        : source.initial(next)
-      return text === undefined ? [] : [text]
-    }),
-  )
+  return join(renderUpdateParts(value, previous, delta))
 }
 
 export function hash(value: Schema.Json) {

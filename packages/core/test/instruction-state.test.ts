@@ -229,6 +229,47 @@ describe("InstructionState", () => {
     }),
   )
 
+  it.effect("publishes a date change as its own notice, after the batch", () =>
+    Effect.gen(function* () {
+      const sessionID = SessionSchema.ID.make("ses_instruction_date_notice")
+      const { db, events } = yield* setup(sessionID)
+      let catalog = "catalog"
+      let date = "2026-11-22"
+      const instructions = Instructions.combine([
+        source("core/codemode", Effect.sync(() => catalog)),
+        source("core/date", Effect.sync(() => date)),
+      ])
+
+      yield* InstructionState.commit(db, events, instructions, yield* InstructionState.observe(db, instructions, sessionID))
+
+      catalog = "catalog v2"
+      date = "2026-11-23"
+      yield* InstructionState.commit(db, events, instructions, yield* InstructionState.observe(db, instructions, sessionID))
+
+      const rows = yield* instructionEvents(db, sessionID)
+      expect(rows.map((event) => event.data.text)).toEqual([undefined, "catalog v2", "2026-11-23"])
+      expect(rows.map((event) => event.data.delta)).toMatchObject([
+        {
+          "core/codemode": Instructions.hash("catalog"),
+          "core/date": Instructions.hash("2026-11-22"),
+        },
+        { "core/codemode": Instructions.hash("catalog v2") },
+        { "core/date": Instructions.hash("2026-11-23") },
+      ])
+
+      const messages = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .orderBy(asc(SessionMessageTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      expect(messages.filter((message) => message.type === "system").map((message) => message.data)).toMatchObject([
+        { text: "catalog v2" },
+        { text: "2026-11-23" },
+      ])
+    }),
+  )
+
   it.effect("records reordered instructions without emitting update text", () =>
     Effect.gen(function* () {
       const sessionID = SessionSchema.ID.make("ses_instruction_reorder")

@@ -42,25 +42,62 @@ export const commit = Effect.fn("InstructionState.commit")(function* (
   observation: Observation,
 ) {
   if (!observation.initial && Object.keys(observation.delta).length === 0) return
+
+  const blobs = (delta: Instructions.Delta) =>
+    Object.fromEntries(
+      Object.entries(delta).flatMap(([, hash]) =>
+        hash === "removed" || !Object.hasOwn(observation.blobs, hash)
+          ? []
+          : [[hash, observation.blobs[hash]] as const],
+      ),
+    )
+
+  // Initial sync establishes the baseline; unlike later deltas it is not chronological history.
+  if (observation.initial) {
+    yield* bus.publish(
+      SessionEvent.InstructionsUpdated,
+      { sessionID: observation.sessionID, delta: observation.delta },
+      {
+        metadata: { instructions: { initial: true } },
+        commit: () => insertBlobs(db, blobs(observation.delta)),
+      },
+    )
+    return
+  }
+
+  // One message per event is a schema constraint: session_message is keyed by
+  // (session_id, seq) and seq is the event's durable sequence. Split the delta
+  // so the date can be its own event, and therefore its own system message.
+  const dateDelta: Record<string, (typeof observation.delta)[string]> = {}
+  const restDelta: Record<string, (typeof observation.delta)[string]> = {}
+  for (const [key, value] of Object.entries(observation.delta)) {
+    if (key === "core/date") dateDelta[key] = value
+    else restDelta[key] = value
+  }
+
   // The rendered text is frozen into the durable event because re-rendering it
   // later would require the original Location-scoped instruction sources.
-  const text = observation.initial ? "" : yield* renderUpdateText(db, instructions, observation)
-  yield* bus.publish(
-    SessionEvent.InstructionsUpdated,
-    {
-      sessionID: observation.sessionID,
-      delta: observation.delta,
-      ...(text.length > 0 ? { text } : {}),
-    },
-    {
-      // Initial sync establishes the baseline; unlike later deltas it is not chronological history.
-      ...(observation.initial ? { metadata: { instructions: { initial: true } } } : {}),
-      commit: () => insertBlobs(db, observation.blobs),
-    },
-  )
+  const parts = yield* renderUpdateParts(db, instructions, observation)
+  const publish = (delta: Record<string, (typeof observation.delta)[string]>, keys: ReadonlySet<string>) => {
+    const text = Instructions.join(parts.filter((part) => keys.has(part.key)))
+    return bus.publish(
+      SessionEvent.InstructionsUpdated,
+      {
+        sessionID: observation.sessionID,
+        delta,
+        ...(text.length > 0 ? { text } : {}),
+      },
+      { commit: () => insertBlobs(db, blobs(delta)) },
+    )
+  }
+
+  const rest = new Set(Object.keys(restDelta))
+  if (rest.size > 0) yield* publish(restDelta, rest)
+  const date = new Set(Object.keys(dateDelta))
+  if (date.size > 0) yield* publish(dateDelta, date)
 })
 
-const renderUpdateText = Effect.fnUntraced(function* (
+const renderUpdateParts = Effect.fnUntraced(function* (
   db: DatabaseService,
   instructions: Instructions.List,
   observation: Observation,
@@ -74,7 +111,7 @@ const renderUpdateText = Effect.fnUntraced(function* (
   const admitted = new Map(
     Object.entries(observation.blobs).map(([hash, value]) => [Instructions.Hash.make(hash), value]),
   )
-  return Instructions.renderUpdate(instructions, previous, dereferenceDelta(observation.delta, admitted))
+  return Instructions.renderUpdateParts(instructions, previous, dereferenceDelta(observation.delta, admitted))
 })
 
 export const prepare = Effect.fn("InstructionState.prepare")(function* (

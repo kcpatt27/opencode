@@ -86,6 +86,27 @@ describe("Instructions", () => {
     }),
   )
 
+  test("renders changed sources as keyed parts in composition order", () => {
+    const instructions = Instructions.combine([
+      source({ key: "core/codemode", value: "catalog" }),
+      source({ key: "core/date", value: "2026-11-23" }),
+    ])
+
+    expect(
+      Instructions.renderUpdateParts(
+        instructions,
+        { "core/codemode": "catalog", "core/date": "2026-11-22" },
+        {
+          "core/codemode": Option.some("catalog v2"),
+          "core/date": Option.some("2026-11-23"),
+        },
+      ),
+    ).toEqual([
+      { key: key("core/codemode"), text: "catalog v2" },
+      { key: key("core/date"), text: "2026-11-23" },
+    ])
+  })
+
   it.effect("admits and renders an observed removal", () =>
     Effect.gen(function* () {
       const instructions = source({
