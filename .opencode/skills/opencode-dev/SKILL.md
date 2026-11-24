@@ -101,6 +101,27 @@ for db in ~/.local/share/opencode/*.db; do
 done
 ```
 
+## Plugin load failures
+
+An OpenCode V2 plugin that fails to load usually leaves the TUI looking normal.
+Three checks, in order:
+
+1. **Read the cause from the log.** Search the active log for
+   `failed to load plugin`. The line usually names the missing package or the
+   failing import. Filter by `run=` when the log is shared with other processes.
+   There is no plugin listing command in the CLI, so do not build a triage step
+   around one; the log line is the authoritative signal.
+2. **Check the plugin's own dependencies.** V2 does not auto-provide
+   `@opencode/plugin`. Inspect `package.json` and `node_modules` inside the
+   plugin directory. A plugin that imports the package without declaring it
+   fails to resolve even though the host app has the package installed.
+3. **Check that the configured name resolves.** A local path that is not a file,
+   or an npm name that is not installed, both surface as "failed to load". Confirm
+   the config entry points at something the loader can open.
+
+Restart the server after the fix. Plugin resolution happens at startup, so a
+reloaded config alone does not pick up a newly installed dependency.
+
 ## Logs
 
 - Log files live under `~/.local/share/opencode/log/`. In a local/dev checkout the active file is `opencode-local.log`; `opencode.log` is used for non-local (released) channel installs. Both are append-only, shared across every CLI and server process on the machine.
@@ -222,3 +243,21 @@ termctrl start opencode-debug --host opentui --cols 112 --rows 34 -- \
 - Run `bun typecheck` from `packages/cli` after CLI adapter changes.
 - Run `bun typecheck` and `bun test` from `packages/tui` after shared TUI changes. Do not run tests from the repository root.
 - Treat automated checks and Terminal Control smoke tests as complementary. For user-visible changes, verify initial render, the changed interaction, Ctrl-C exit behavior, and save a screenshot of the corrected state.
+
+### End-to-end part persistence with a fake provider
+
+To prove a message part survives the server round trip, do not read the TUI:
+
+1. Start a local server from the checkout with the fake provider configured and a
+   known password. Config discovery walks up to a git repo root, so run from the
+   repo; a config written outside a repo is not found and the server silently
+   uses defaults.
+2. Write the prompt to a file and POST it from that file, so the payload is
+   reproducible and does not depend on shell quoting.
+3. Read the persisted session, message, and part records back through
+   `bun dev api` and compare the stored part shape to what the client expects.
+4. Restart the server and read the same records again. A part that existed only
+   in memory disappears at this step.
+
+This is the only check that covers the storage path. A rendered screenshot or a
+Terminal Control smoke test covers the client surface, not persistence.
